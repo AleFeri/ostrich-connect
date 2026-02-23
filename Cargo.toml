@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/oc-core",
+  "crates/oc-backend",
+  "crates/oc-ffi",
+  "crates/protocol-ftp",
+  "crates/protocol-sftp",
+  "crates/protocol-ftps",
+  "apps/terminal-ratatui",
+]

@@ -1,0 +1,5 @@
+module COstrichFFI [system] {
+    header "include/oc_ffi.h"
+    link "oc_ffi"
+    export *
+}

@@ -1,0 +1,16 @@
+[package]
+name = "oc-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+oc-backend = { path = "../oc-backend" }
+oc-core = { path = "../oc-core" }
+oc-protocol-ftp = { path = "../protocol-ftp" }
+oc-protocol-sftp = { path = "../protocol-sftp" }
+oc-protocol-ftps = { path = "../protocol-ftps" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }

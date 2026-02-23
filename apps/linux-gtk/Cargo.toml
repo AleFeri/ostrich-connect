@@ -1,0 +1,16 @@
+[package]
+name = "linux-gtk"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+gtk4 = "0.8"
+oc-backend = { path = "../../crates/oc-backend" }
+oc-core = { path = "../../crates/oc-core" }
+oc-protocol-ftp = { path = "../../crates/protocol-ftp" }
+oc-protocol-sftp = { path = "../../crates/protocol-sftp" }
+oc-protocol-ftps = { path = "../../crates/protocol-ftps" }
+secrecy = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread"] }

@@ -1,0 +1,11 @@
+[package]
+name = "oc-protocol-sftp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+oc-core = { path = "../oc-core" }
+ssh2 = "0.9"
+dirs = "5"
+secrecy = "0.8"

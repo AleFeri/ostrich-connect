@@ -1,0 +1,10 @@
+[package]
+name = "oc-protocol-ftp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+oc-core = { path = "../oc-core" }
+suppaftp = "8.0"
+secrecy = "0.8"

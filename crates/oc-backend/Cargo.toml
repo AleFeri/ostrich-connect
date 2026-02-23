@@ -1,0 +1,8 @@
+[package]
+name = "oc-backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oc-core = { path = "../oc-core" }
+uuid = { version = "1", features = ["v4"] }
