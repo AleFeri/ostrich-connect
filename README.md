@@ -2,6 +2,12 @@
 
 `ostrich-connect` is a Cyberduck-style scaffolder with a protocol-agnostic Rust backend and multiple platform frontends.
 
+## Disclaimer
+
+- This project was done with AI.
+- I built it to replace Cyberduck because, in my experience, it is unusable, slow, and full of bugs.
+- This is not a demonstration of my programming skills.
+
 ## Workspace Layout
 
 - `crates/oc-core`: shared protocol abstractions, command contract, and secure connection types.
