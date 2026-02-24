@@ -61,6 +61,43 @@ pub struct ConnectionProfile {
     pub passive_mode: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedConnection {
+    pub name: String,
+    pub profile: ConnectionProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    #[serde(default = "default_editor")]
+    pub default_editor: String,
+    #[serde(default)]
+    pub connections: Vec<SavedConnection>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            default_editor: default_editor(),
+            connections: Vec::new(),
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn normalize(mut self) -> Self {
+        self.default_editor = self.default_editor.trim().to_owned();
+        if self.default_editor.is_empty() {
+            self.default_editor = default_editor();
+        }
+        self
+    }
+}
+
+fn default_editor() -> String {
+    "zed --wait".to_owned()
+}
+
 impl ConnectionProfile {
     pub fn socket_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)

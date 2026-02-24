@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 oc-core = { path = "../oc-core" }
+serde_json = "1"
 uuid = { version = "1", features = ["v4"] }

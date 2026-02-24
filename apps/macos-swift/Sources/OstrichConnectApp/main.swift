@@ -274,6 +274,7 @@ enum BackendResponse {
     case transferCompleted(destination: String)
     case pathDeleted
     case pathRenamed
+    case config(defaultEditor: String, connections: [SavedConnection])
     case supportedProtocols([ProtocolKind])
     case ok(String)
     case error(code: String, message: String)
@@ -391,6 +392,14 @@ enum BackendResponseParser {
         case "path_renamed":
             return .pathRenamed
 
+        case "config":
+            let configRaw = object["config"] as? [String: Any] ?? [:]
+            let defaultEditor = (configRaw["default_editor"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let connectionsRaw = configRaw["connections"] as? [[String: Any]] ?? []
+            let connections = connectionsRaw.compactMap(parseSavedConnection)
+            return .config(defaultEditor: defaultEditor, connections: connections)
+
         case "supported_protocols":
             let protocols = (object["protocols"] as? [String] ?? [])
                 .compactMap { ProtocolKind(rawValue: $0) }
@@ -408,6 +417,53 @@ enum BackendResponseParser {
         default:
             return .unknown(status: status)
         }
+    }
+
+    private static func parseSavedConnection(item: [String: Any]) -> SavedConnection? {
+        guard
+            let name = item["name"] as? String,
+            let profileRaw = item["profile"] as? [String: Any],
+            let profile = parseProfile(item: profileRaw)
+        else {
+            return nil
+        }
+
+        return SavedConnection(id: UUID(), name: name, profile: profile)
+    }
+
+    private static func parseProfile(item: [String: Any]) -> ConnectionProfileData? {
+        guard
+            let protocolRaw = item["protocol"] as? String,
+            let protocolKind = ProtocolKind(rawValue: protocolRaw),
+            let host = item["host"] as? String,
+            let port = (item["port"] as? NSNumber)?.intValue,
+            let username = item["username"] as? String,
+            let securityRaw = item["security"] as? String,
+            let security = ConnectionSecurity(rawValue: securityRaw)
+        else {
+            return nil
+        }
+
+        return ConnectionProfileData(
+            protocolKind: protocolKind,
+            host: host,
+            port: port,
+            username: username,
+            password: optionalString(item["password"]),
+            privateKeyPem: optionalString(item["private_key_pem"]),
+            privateKeyPath: optionalString(item["private_key_path"]),
+            security: security,
+            strictHostKeyChecking: item["strict_host_key_checking"] as? Bool ?? false,
+            passiveMode: item["passive_mode"] as? Bool ?? false
+        )
+    }
+
+    private static func optionalString(_ value: Any?) -> String? {
+        guard let string = value as? String else {
+            return nil
+        }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -435,13 +491,16 @@ final class AppViewModel: ObservableObject {
 
     let backendReady: Bool
     private let backend: BackendBridge?
+    private var defaultEditor: String = "zed --wait"
 
     init() {
         backend = BackendBridge()
         backendReady = backend != nil
         if !backendReady {
             setStatus("Could not initialize Rust backend bridge.", level: .error)
+            return
         }
+        loadConfig()
     }
 
     var selectedConnection: SavedConnection? {
@@ -475,26 +534,30 @@ final class AppViewModel: ObservableObject {
     func saveDraft() {
         do {
             let connection: SavedConnection
+            let baseMessage: String
             switch formMode {
             case .create:
                 connection = try draft.toSavedConnection(existingID: nil)
                 connections.append(connection)
                 selectedConnectionID = connection.id
-                setStatus("Connection created.", level: .success)
+                baseMessage = "Connection created."
             case let .edit(existingID):
                 connection = try draft.toSavedConnection(existingID: existingID)
                 if let index = connections.firstIndex(where: { $0.id == existingID }) {
                     connections[index] = connection
                     selectedConnectionID = existingID
-                    setStatus("Connection updated.", level: .success)
+                    baseMessage = "Connection updated."
                 } else {
                     connections.append(connection)
                     selectedConnectionID = connection.id
-                    setStatus("Connection created.", level: .success)
+                    baseMessage = "Connection created."
                 }
             }
             formError = nil
             isFormPresented = false
+            if persistConfig() {
+                setStatus(baseMessage, level: .success)
+            }
         } catch {
             formError = error.localizedDescription
         }
@@ -507,7 +570,9 @@ final class AppViewModel: ObservableObject {
         }
         connections.removeAll { $0.id == selectedConnectionID }
         self.selectedConnectionID = connections.first?.id
-        setStatus("Connection deleted.", level: .warning)
+        if persistConfig() {
+            setStatus("Connection deleted.", level: .warning)
+        }
     }
 
     func connectSelectedConnection() {
@@ -688,6 +753,47 @@ final class AppViewModel: ObservableObject {
         return downloads.appendingPathComponent(entry.name).path
     }
 
+    private func loadConfig() {
+        guard let response = execute(command: ["command": "load_config"]) else {
+            return
+        }
+
+        switch response {
+        case let .config(defaultEditor, connections):
+            self.defaultEditor = defaultEditor.isEmpty ? "zed --wait" : defaultEditor
+            self.connections = connections
+            selectedConnectionID = connections.first?.id
+            setStatus("Loaded \(connections.count) saved connections.", level: .info)
+        case let .error(_, message):
+            setStatus("Could not load config: \(message)", level: .error)
+        default:
+            setStatus("Unexpected config response.", level: .warning)
+        }
+    }
+
+    @discardableResult
+    private func persistConfig() -> Bool {
+        guard let response = execute(
+            command: [
+                "command": "save_config",
+                "config": configDictionary(),
+            ]
+        ) else {
+            return false
+        }
+
+        switch response {
+        case .ok:
+            return true
+        case let .error(_, message):
+            setStatus("Config save failed: \(message)", level: .error)
+            return false
+        default:
+            setStatus("Unexpected save_config response.", level: .warning)
+            return false
+        }
+    }
+
     private func execute(command: [String: Any]) -> BackendResponse? {
         guard let backend else {
             setStatus("Backend bridge not available.", level: .error)
@@ -699,6 +805,19 @@ final class AppViewModel: ObservableObject {
             setStatus("Backend error: \(error.localizedDescription)", level: .error)
             return nil
         }
+    }
+
+    private func configDictionary() -> [String: Any] {
+        let savedConnections = connections.map { connection in
+            [
+                "name": connection.name,
+                "profile": profileDictionary(from: connection.profile),
+            ]
+        }
+        return [
+            "default_editor": defaultEditor,
+            "connections": savedConnections,
+        ]
     }
 
     private func profileDictionary(from profile: ConnectionProfileData) -> [String: Any] {

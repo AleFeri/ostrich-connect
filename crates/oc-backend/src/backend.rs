@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use oc_core::command::{TransferDirection, UiCommand, UiResponse};
 use oc_core::error::OcError;
 use oc_core::protocol::ProtocolSession;
-use oc_core::types::SessionId;
+use oc_core::types::{AppConfig, SessionId};
 use uuid::Uuid;
 
 use crate::ProtocolRegistry;
@@ -11,13 +12,19 @@ use crate::ProtocolRegistry;
 pub struct Backend {
     registry: ProtocolRegistry,
     sessions: HashMap<SessionId, Box<dyn ProtocolSession>>,
+    config_path: PathBuf,
+    config: AppConfig,
 }
 
 impl Backend {
     pub fn new(registry: ProtocolRegistry) -> Self {
+        let config_path = crate::config::config_path();
+        let config = crate::config::load_or_create(&config_path).unwrap_or_default();
         Self {
             registry,
             sessions: HashMap::new(),
+            config_path,
+            config,
         }
     }
 
@@ -33,6 +40,17 @@ impl Backend {
             UiCommand::SupportedProtocols => Ok(UiResponse::SupportedProtocols {
                 protocols: self.registry.supported(),
             }),
+            UiCommand::LoadConfig => Ok(UiResponse::Config {
+                config: self.config.clone(),
+            }),
+            UiCommand::SaveConfig { config } => {
+                let normalized = config.normalize();
+                crate::config::save(&self.config_path, &normalized)?;
+                self.config = normalized;
+                Ok(UiResponse::Ok {
+                    message: "config_saved".to_owned(),
+                })
+            }
             UiCommand::Connect { profile } => {
                 profile.validate()?;
                 let factory = self

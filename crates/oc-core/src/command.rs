@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ConnectionProfile, ProtocolKind, RemoteEntry, SessionId};
+use crate::types::{AppConfig, ConnectionProfile, ProtocolKind, RemoteEntry, SessionId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -33,6 +33,10 @@ pub enum UiCommand {
         session_id: SessionId,
         from: String,
         to: String,
+    },
+    LoadConfig,
+    SaveConfig {
+        config: AppConfig,
     },
     SupportedProtocols,
 }
@@ -74,6 +78,9 @@ pub enum UiResponse {
         session_id: SessionId,
         from: String,
         to: String,
+    },
+    Config {
+        config: AppConfig,
     },
     SupportedProtocols {
         protocols: Vec<ProtocolKind>,

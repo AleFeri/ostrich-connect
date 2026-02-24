@@ -171,6 +171,7 @@ fn build_ui(app: &Application) {
         &state.borrow().log_buffer,
         "Use protocol selector + Connect. Backend contract is protocol-agnostic.",
     );
+    dispatch(&state, UiCommand::LoadConfig);
 
     window.present();
 }

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 ratatui = "0.28"
 secrecy = "0.8"

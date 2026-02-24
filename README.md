@@ -34,10 +34,48 @@
 - SFTP requires SSH transport and supports strict host-key checking flags.
 - FTPS enforces TLS security modes (`tls_explicit` / `tls_implicit`).
 
+## Shared Config
+
+- A shared JSON config is managed by the Rust backend for all frontends.
+- Default path:
+  - macOS: `~/Library/Application Support/ostrich-connect/config.json`
+  - Linux: `~/.config/ostrich-connect/config.json`
+- Override path with `OSTRICH_CONNECT_CONFIG_PATH`.
+- Default editor is `zed --wait`.
+
 ## Build
 
 ```bash
 cargo run -p terminal-ratatui
+```
+
+Install CLI + TUI binaries:
+
+```bash
+cargo install --path apps/terminal-ratatui --bins
+```
+
+This installs:
+
+- `terminal-ratatui` (direct TUI launcher)
+- `oc` (convenience CLI)
+
+`oc` usage:
+
+```bash
+oc                  # open the TUI
+oc ls               # list saved connection names from shared backend config
+oc connect my-sftp  # open TUI and auto-connect to that saved connection
+```
+
+Optional tab completion:
+
+```bash
+# zsh
+oc completion zsh > ~/.zfunc/_oc
+
+# bash
+oc completion bash > ~/.oc-completion.bash
 ```
 
 ## Platform Frontends

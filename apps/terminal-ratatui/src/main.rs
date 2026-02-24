@@ -1,6 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -11,7 +12,8 @@ use crossterm::terminal::{
 use oc_backend::{Backend, ProtocolRegistry};
 use oc_core::command::{UiCommand, UiResponse};
 use oc_core::types::{
-    ConnectionProfile, ConnectionSecurity, ProtocolKind, RemoteEntry, RemoteEntryKind, SessionId,
+    AppConfig, ConnectionProfile, ConnectionSecurity, ProtocolKind, RemoteEntry, RemoteEntryKind,
+    SavedConnection, SessionId,
 };
 use oc_protocol_ftp::FtpProtocolFactory;
 use oc_protocol_ftps::FtpsProtocolFactory;
@@ -52,12 +54,6 @@ impl Default for UiTheme {
             muted: Color::DarkGray,
         }
     }
-}
-
-#[derive(Clone)]
-struct SavedConnection {
-    name: String,
-    profile: ConnectionProfile,
 }
 
 #[derive(Clone)]
@@ -331,6 +327,7 @@ enum FormAction {
 
 struct AppState {
     backend: Backend,
+    config: AppConfig,
     theme: UiTheme,
     screen: Screen,
     should_quit: bool,
@@ -347,13 +344,15 @@ struct AppState {
 
 impl AppState {
     fn new() -> Self {
+        let config = AppConfig::default();
         Self {
             backend: build_backend(),
+            config: config.clone(),
             theme: UiTheme::default(),
             screen: Screen::Connections,
             should_quit: false,
             status: "Create a connection with n, then press Enter to open it.".to_owned(),
-            connections: Vec::new(),
+            connections: config.connections,
             selected_connection: 0,
             session_id: None,
             current_path: "/".to_owned(),
@@ -361,6 +360,78 @@ impl AppState {
             selected_entry: 0,
             navigator_search: None,
             download_popup: None,
+        }
+    }
+
+    async fn load_config(&mut self) {
+        let response = self.backend.execute(UiCommand::LoadConfig).await;
+        match response {
+            UiResponse::Config { config } => {
+                self.config = config.normalize();
+                self.connections = self.config.connections.clone();
+                if self.selected_connection >= self.connections.len()
+                    && !self.connections.is_empty()
+                {
+                    self.selected_connection = self.connections.len() - 1;
+                }
+                if self.connections.is_empty() {
+                    self.selected_connection = 0;
+                }
+                self.status = format!(
+                    "Loaded {} saved connections. Editor: {}",
+                    self.connections.len(),
+                    self.config.default_editor
+                );
+            }
+            UiResponse::Error { message, .. } => {
+                self.status = format!("Could not load config: {message}");
+            }
+            other => {
+                self.status = format!("Unexpected config response: {other:?}");
+            }
+        }
+    }
+
+    async fn persist_config(&mut self) -> Result<(), String> {
+        let mut config = self.config.clone();
+        config.connections = self.connections.clone();
+        config = config.normalize();
+
+        let response = self
+            .backend
+            .execute(UiCommand::SaveConfig {
+                config: config.clone(),
+            })
+            .await;
+
+        match response {
+            UiResponse::Ok { .. } => {
+                self.config = config;
+                Ok(())
+            }
+            UiResponse::Error { message, .. } => Err(message),
+            other => Err(format!("Unexpected backend response: {other:?}")),
+        }
+    }
+
+    async fn auto_connect_if_requested(&mut self) {
+        let requested = std::env::var("OSTRICH_CONNECT_AUTO_CONNECT")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let Some(requested) = requested else {
+            return;
+        };
+
+        if let Some(index) = self
+            .connections
+            .iter()
+            .position(|connection| connection.name.eq_ignore_ascii_case(&requested))
+        {
+            self.selected_connection = index;
+            self.connect_selected().await;
+        } else {
+            self.status = format!("Saved connection '{requested}' was not found.");
         }
     }
 
@@ -519,7 +590,7 @@ impl AppState {
 
         match self.screen_kind() {
             ScreenKind::Connections => self.handle_connections_key(key).await,
-            ScreenKind::Form => self.handle_form_key(key),
+            ScreenKind::Form => self.handle_form_key(key).await,
             ScreenKind::Navigator => self.handle_navigator_key(key).await,
         }
     }
@@ -529,7 +600,7 @@ impl AppState {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('n') => self.screen = Screen::Form(ConnectionForm::new_create()),
             KeyCode::Char('e') => self.open_edit_form(),
-            KeyCode::Char('x') | KeyCode::Delete => self.delete_selected_connection(),
+            KeyCode::Char('x') | KeyCode::Delete => self.delete_selected_connection().await,
             KeyCode::Char('j') | KeyCode::Down => self.move_connection_cursor(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_connection_cursor(-1),
             KeyCode::Enter => self.connect_selected().await,
@@ -537,7 +608,7 @@ impl AppState {
         }
     }
 
-    fn handle_form_key(&mut self, key: KeyEvent) {
+    async fn handle_form_key(&mut self, key: KeyEvent) {
         let mut action = FormAction::None;
 
         if let Screen::Form(form) = &mut self.screen {
@@ -605,25 +676,34 @@ impl AppState {
             }
             FormAction::Save { mode, connection } => match connection {
                 Ok(connection) => {
+                    let base_message;
                     match mode {
                         FormMode::Create => {
                             self.connections.push(connection);
                             self.selected_connection = self.connections.len().saturating_sub(1);
-                            self.status = "Connection created.".to_owned();
+                            base_message = "Connection created.".to_owned();
                         }
                         FormMode::Edit(index) => {
                             if index < self.connections.len() {
                                 self.connections[index] = connection;
                                 self.selected_connection = index;
-                                self.status = "Connection updated.".to_owned();
+                                base_message = "Connection updated.".to_owned();
                             } else {
                                 self.connections.push(connection);
                                 self.selected_connection = self.connections.len().saturating_sub(1);
-                                self.status = "Connection created.".to_owned();
+                                base_message = "Connection created.".to_owned();
                             }
                         }
                     }
                     self.screen = Screen::Connections;
+                    match self.persist_config().await {
+                        Ok(()) => {
+                            self.status = base_message;
+                        }
+                        Err(message) => {
+                            self.status = format!("{base_message} Config save failed: {message}");
+                        }
+                    }
                 }
                 Err(message) => {
                     if let Screen::Form(form) = &mut self.screen {
@@ -680,6 +760,7 @@ impl AppState {
             KeyCode::Char('l') | KeyCode::Enter => self.open_selected_entry().await,
             KeyCode::Char('r') => self.refresh_directory().await,
             KeyCode::Char('d') => self.open_download_popup(),
+            KeyCode::Char('e') => self.edit_selected_file().await,
             KeyCode::Char('/') => self.enter_search_mode(),
             _ => {}
         }
@@ -705,7 +786,7 @@ impl AppState {
         self.screen = Screen::Form(ConnectionForm::from_existing(index, connection));
     }
 
-    fn delete_selected_connection(&mut self) {
+    async fn delete_selected_connection(&mut self) {
         if self.connections.is_empty() {
             self.status = "No connection to delete.".to_owned();
             return;
@@ -718,7 +799,14 @@ impl AppState {
         if self.connections.is_empty() {
             self.selected_connection = 0;
         }
-        self.status = "Connection deleted.".to_owned();
+        match self.persist_config().await {
+            Ok(()) => {
+                self.status = "Connection deleted.".to_owned();
+            }
+            Err(message) => {
+                self.status = format!("Connection deleted, but config save failed: {message}");
+            }
+        }
     }
 
     async fn connect_selected(&mut self) {
@@ -892,6 +980,192 @@ impl AppState {
             }
         }
     }
+
+    async fn edit_selected_file(&mut self) {
+        let Some(session_id) = self.session_id else {
+            self.status = "No active session.".to_owned();
+            return;
+        };
+
+        let Some(entry) = self.selected_entry().cloned() else {
+            self.status = "No entry selected.".to_owned();
+            return;
+        };
+
+        if entry.kind == RemoteEntryKind::Directory {
+            self.status = "Cannot edit a directory.".to_owned();
+            return;
+        }
+
+        let local_path = local_edit_target_for(&entry.path);
+        if let Some(parent_dir) = local_path.parent() {
+            if let Err(error) = std::fs::create_dir_all(parent_dir) {
+                self.status = format!("Could not prepare local edit path: {error}");
+                return;
+            }
+        }
+
+        let local_path_string = local_path.to_string_lossy().to_string();
+        let response = self
+            .backend
+            .execute(UiCommand::DownloadFile {
+                session_id,
+                remote_path: entry.path.clone(),
+                local_path: local_path_string,
+            })
+            .await;
+
+        match response {
+            UiResponse::TransferCompleted { .. } => {}
+            UiResponse::Error { message, .. } => {
+                self.status = format!("Could not open editor: download failed: {message}");
+                let _ = std::fs::remove_file(&local_path);
+                return;
+            }
+            other => {
+                self.status = format!("Could not open editor: {other:?}");
+                let _ = std::fs::remove_file(&local_path);
+                return;
+            }
+        }
+
+        if let Err(error) = suspend_terminal() {
+            self.status = format!("Could not suspend terminal for editor: {error}");
+            let _ = std::fs::remove_file(&local_path);
+            return;
+        }
+
+        let edit_result = self
+            .run_editor_with_sync(session_id, &entry.path, &local_path)
+            .await;
+
+        let restore_result = resume_terminal();
+        let _ = std::fs::remove_file(&local_path);
+
+        if let Err(error) = restore_result {
+            self.status = format!("Editor closed, but terminal restore failed: {error}");
+            return;
+        }
+
+        self.status = match edit_result {
+            Ok(message) => message,
+            Err(message) => message,
+        };
+    }
+
+    async fn run_editor_with_sync(
+        &mut self,
+        session_id: SessionId,
+        remote_path: &str,
+        local_path: &Path,
+    ) -> Result<String, String> {
+        let editor = preferred_editor(&self.config.default_editor);
+        let local_path_string = local_path.to_string_lossy().to_string();
+        let command_line = format!("{editor} {}", shell_quote(&local_path_string));
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command_line)
+            .spawn()
+            .map_err(|error| format!("Could not launch editor '{editor}': {error}"))?;
+
+        let mut sync_count = 0usize;
+        let mut last_sync_error: Option<String> = None;
+        let mut last_seen_version = local_file_version(local_path).ok();
+        let mut last_synced_version = last_seen_version;
+
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if let Ok(current_version) = local_file_version(local_path) {
+                        if Some(current_version) != last_seen_version {
+                            last_seen_version = Some(current_version);
+                            match self
+                                .upload_edited_file(session_id, local_path, remote_path)
+                                .await
+                            {
+                                Ok(()) => {
+                                    last_synced_version = Some(current_version);
+                                    sync_count += 1;
+                                    last_sync_error = None;
+                                }
+                                Err(message) => {
+                                    last_sync_error = Some(message);
+                                }
+                            }
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(350));
+                }
+                Err(error) => {
+                    return Err(format!("Editor process failed: {error}"));
+                }
+            }
+        };
+
+        if let Ok(current_version) = local_file_version(local_path) {
+            if Some(current_version) != last_synced_version {
+                match self
+                    .upload_edited_file(session_id, local_path, remote_path)
+                    .await
+                {
+                    Ok(()) => {
+                        sync_count += 1;
+                        last_sync_error = None;
+                    }
+                    Err(message) => {
+                        last_sync_error = Some(message);
+                    }
+                }
+            }
+        }
+
+        if !exit_status.success() {
+            let code = exit_status
+                .code()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "signal".to_owned());
+            return Err(format!("Editor exited with status {code}."));
+        }
+
+        if let Some(message) = last_sync_error {
+            return Err(format!("Edited locally but sync failed: {message}"));
+        }
+
+        if sync_count == 0 {
+            Ok(format!(
+                "Closed editor for {remote_path} with no local changes."
+            ))
+        } else if sync_count == 1 {
+            Ok(format!("Saved and synced {remote_path}."))
+        } else {
+            Ok(format!(
+                "Saved and synced {remote_path} ({sync_count} saves)."
+            ))
+        }
+    }
+
+    async fn upload_edited_file(
+        &mut self,
+        session_id: SessionId,
+        local_path: &Path,
+        remote_path: &str,
+    ) -> Result<(), String> {
+        let response = self
+            .backend
+            .execute(UiCommand::UploadFile {
+                session_id,
+                local_path: local_path.to_string_lossy().to_string(),
+                remote_path: remote_path.to_owned(),
+            })
+            .await;
+
+        match response {
+            UiResponse::TransferCompleted { .. } => Ok(()),
+            UiResponse::Error { message, .. } => Err(message),
+            other => Err(format!("Unexpected backend response: {other:?}")),
+        }
+    }
 }
 
 fn protocol_defaults(protocol: ProtocolKind) -> (u16, ConnectionSecurity, bool, bool) {
@@ -964,6 +1238,79 @@ fn downloads_target_for(file_name: &str) -> String {
     downloads.to_string_lossy().to_string()
 }
 
+fn local_edit_target_for(remote_path: &str) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let file_name = Path::new(remote_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("remote-file");
+    std::env::temp_dir()
+        .join("ostrich-connect-edit")
+        .join(format!("{timestamp}-{file_name}"))
+}
+
+fn preferred_editor(configured_editor: &str) -> String {
+    let configured = configured_editor.trim();
+    if !configured.is_empty() {
+        return configured.to_owned();
+    }
+
+    std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "vi".to_owned())
+}
+
+fn shell_quote(argument: &str) -> String {
+    if argument.is_empty() {
+        return "''".to_owned();
+    }
+
+    let mut quoted = String::from("'");
+    for ch in argument.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+fn local_file_version(path: &Path) -> io::Result<(SystemTime, u64)> {
+    let metadata = std::fs::metadata(path)?;
+    let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+    Ok((modified, metadata.len()))
+}
+
+fn suspend_terminal() -> io::Result<()> {
+    disable_raw_mode()?;
+    if let Err(error) = execute!(io::stdout(), LeaveAlternateScreen) {
+        let _ = enable_raw_mode();
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn resume_terminal() -> io::Result<()> {
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    if let Err(error) = enable_raw_mode() {
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn build_backend() -> Backend {
     let mut registry = ProtocolRegistry::default();
     registry.register(FtpProtocolFactory::new());
@@ -995,6 +1342,7 @@ fn status_style(status: &str, theme: UiTheme) -> Style {
             .add_modifier(Modifier::BOLD)
     } else if status_lower.contains("connected")
         || status_lower.contains("downloaded")
+        || status_lower.contains("synced")
         || status_lower.contains("created")
         || status_lower.contains("updated")
     {
@@ -1295,7 +1643,7 @@ fn draw_navigator(frame: &mut ratatui::Frame, app: &AppState) {
     let footer = if app.navigator_search.is_some() {
         "/ search: type prefix | Enter:resolve Esc:cancel Backspace:edit"
     } else {
-        "j/k:move h/l:up/open g/G:top/bottom Ctrl-u/d:jump /:search d:download r:refresh b/q:back"
+        "j/k:move h/l:up/open g/G:top/bottom Ctrl-u/d:jump /:search d:download e:edit+sync r:refresh b/q:back"
     };
     frame.render_widget(
         Paragraph::new(footer).style(Style::default().fg(theme.muted)),
@@ -1351,6 +1699,8 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = AppState::new();
+    app.load_config().await;
+    app.auto_connect_if_requested().await;
 
     loop {
         terminal.draw(|frame| draw(frame, &app))?;
