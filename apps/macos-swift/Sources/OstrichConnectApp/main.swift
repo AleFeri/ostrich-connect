@@ -289,8 +289,9 @@ struct BackendBridgeError: Error, LocalizedError {
     }
 }
 
-final class BackendBridge {
+final class BackendBridge: @unchecked Sendable {
     private var handle: OpaquePointer?
+    private let lock = NSLock()
 
     init?() {
         guard let raw = oc_backend_new() else {
@@ -306,6 +307,9 @@ final class BackendBridge {
     }
 
     func execute(command: [String: Any]) throws -> BackendResponse {
+        lock.lock()
+        defer { lock.unlock() }
+
         guard let handle else {
             throw BackendBridgeError(message: "Backend handle not initialized.")
         }
@@ -488,6 +492,7 @@ final class AppViewModel: ObservableObject {
 
     @Published var pendingDownloadEntry: RemoteEntry?
     @Published var showDownloadConfirmation: Bool = false
+    @Published var isEditingFile: Bool = false
 
     let backendReady: Bool
     private let backend: BackendBridge?
@@ -753,6 +758,95 @@ final class AppViewModel: ObservableObject {
         return downloads.appendingPathComponent(entry.name).path
     }
 
+    func requestEditSelected() {
+        guard !isEditingFile else {
+            setStatus("Editor sync already running.", level: .warning)
+            return
+        }
+        guard let selectedEntry else {
+            setStatus("Select a file to edit.", level: .warning)
+            return
+        }
+        guard selectedEntry.kind != .directory else {
+            setStatus("Select a file, not a folder, to edit.", level: .warning)
+            return
+        }
+        guard let sessionID else {
+            setStatus("No active session.", level: .warning)
+            return
+        }
+
+        let localURL = localEditURL(for: selectedEntry)
+        let localPath = localURL.path
+        let parentURL = localURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(
+                at: parentURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            setStatus(
+                "Could not prepare local edit path: \(error.localizedDescription)",
+                level: .error
+            )
+            return
+        }
+
+        guard let response = execute(
+            command: [
+                "command": "download_file",
+                "session_id": sessionID.uuidString,
+                "remote_path": selectedEntry.path,
+                "local_path": localPath,
+            ]
+        ) else { return }
+
+        switch response {
+        case .transferCompleted:
+            break
+        case let .error(_, message):
+            setStatus("Could not open editor: \(message)", level: .error)
+            return
+        default:
+            setStatus("Could not open editor: unexpected download response.", level: .warning)
+            return
+        }
+
+        isEditingFile = true
+        setStatus(
+            "Opening editor (\(normalizedEditorCommand())) for \(selectedEntry.name). Saves sync automatically.",
+            level: .info
+        )
+
+        let backend = self.backend
+        let editorCommand = normalizedEditorCommand()
+        let remotePath = selectedEntry.path
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Self.runEditorWithSync(
+                backend: backend,
+                sessionID: sessionID,
+                editorCommand: editorCommand,
+                remotePath: remotePath,
+                localPath: localPath
+            )
+
+            try? FileManager.default.removeItem(at: localURL)
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isEditingFile = false
+                if result.ok {
+                    let message = result.message
+                    self.setStatus(message, level: .success)
+                } else {
+                    let message = result.message
+                    self.setStatus(message, level: .error)
+                }
+            }
+        }
+    }
+
     private func loadConfig() {
         guard let response = execute(command: ["command": "load_config"]) else {
             return
@@ -888,6 +982,145 @@ final class AppViewModel: ObservableObject {
         let pathURL = URL(fileURLWithPath: normalized)
         let parent = pathURL.deletingLastPathComponent().path
         return parent.isEmpty ? "/" : parent
+    }
+
+    private func localEditURL(for entry: RemoteEntry) -> URL {
+        let safeName = entry.name.replacingOccurrences(of: "/", with: "_")
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("ostrich-connect-edit", isDirectory: true)
+            .appendingPathComponent("\(timestamp)-\(safeName)")
+    }
+
+    private func normalizedEditorCommand() -> String {
+        let trimmed = defaultEditor.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "zed --wait" : trimmed
+    }
+
+    nonisolated private static func runEditorWithSync(
+        backend: BackendBridge?,
+        sessionID: UUID,
+        editorCommand: String,
+        remotePath: String,
+        localPath: String
+    ) -> (ok: Bool, message: String) {
+        guard let backend else {
+            return (false, "Backend bridge not available.")
+        }
+
+        let launchCommand = "\(editorCommand) \(shellQuote(localPath))"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-lc", launchCommand]
+
+        do {
+            try process.run()
+        } catch {
+            return (false, "Could not launch editor '\(editorCommand)': \(error.localizedDescription)")
+        }
+
+        var syncCount = 0
+        var lastSyncError: String?
+        let baselineVersion = localFileVersion(path: localPath) ?? (Date(timeIntervalSince1970: 0), 0)
+        var lastSeenVersion = baselineVersion
+        var lastSyncedVersion = baselineVersion
+
+        while process.isRunning {
+            if let currentVersion = localFileVersion(path: localPath),
+               currentVersion != lastSeenVersion
+            {
+                lastSeenVersion = currentVersion
+                if let message = uploadEditedFile(
+                    backend: backend,
+                    sessionID: sessionID,
+                    localPath: localPath,
+                    remotePath: remotePath
+                ) {
+                    lastSyncError = message
+                } else {
+                    lastSyncedVersion = currentVersion
+                    syncCount += 1
+                    lastSyncError = nil
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.35)
+        }
+
+        if let currentVersion = localFileVersion(path: localPath),
+           currentVersion != lastSyncedVersion
+        {
+            if let message = uploadEditedFile(
+                backend: backend,
+                sessionID: sessionID,
+                localPath: localPath,
+                remotePath: remotePath
+            ) {
+                lastSyncError = message
+            } else {
+                syncCount += 1
+                lastSyncError = nil
+            }
+        }
+
+        if process.terminationStatus != 0 {
+            return (false, "Editor exited with status \(process.terminationStatus).")
+        }
+
+        if let lastSyncError {
+            return (false, "Edited locally but sync failed: \(lastSyncError)")
+        }
+
+        if syncCount == 0 {
+            return (true, "Closed editor for \(remotePath) with no local changes.")
+        }
+        if syncCount == 1 {
+            return (true, "Saved and synced \(remotePath).")
+        }
+        return (true, "Saved and synced \(remotePath) (\(syncCount) saves).")
+    }
+
+    nonisolated private static func uploadEditedFile(
+        backend: BackendBridge,
+        sessionID: UUID,
+        localPath: String,
+        remotePath: String
+    ) -> String? {
+        do {
+            let response = try backend.execute(
+                command: [
+                    "command": "upload_file",
+                    "session_id": sessionID.uuidString,
+                    "local_path": localPath,
+                    "remote_path": remotePath,
+                ]
+            )
+            switch response {
+            case .transferCompleted:
+                return nil
+            case let .error(_, message):
+                return message
+            default:
+                return "Unexpected upload response."
+            }
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    nonisolated private static func localFileVersion(path: String) -> (Date, UInt64)? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return nil
+        }
+        let modifiedDate = attributes[.modificationDate] as? Date ?? Date(timeIntervalSince1970: 0)
+        let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+        return (modifiedDate, size)
+    }
+
+    nonisolated private static func shellQuote(_ value: String) -> String {
+        if value.isEmpty {
+            return "''"
+        }
+        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 
@@ -1250,10 +1483,18 @@ struct NavigatorPage: View {
                         }
                         .buttonStyle(.borderedProminent)
                     } else {
-                        Button("Download File") {
-                            viewModel.requestDownloadSelected()
+                        HStack {
+                            Button("Edit File") {
+                                viewModel.requestEditSelected()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(viewModel.isEditingFile)
+
+                            Button("Download File") {
+                                viewModel.requestDownloadSelected()
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 } else {
                     EmptyStateView(
@@ -1294,6 +1535,16 @@ struct NavigatorPage: View {
                     viewModel.openSelectedEntry()
                 }
                 .disabled(viewModel.selectedEntry?.kind != .directory)
+
+                Button("Edit") {
+                    viewModel.requestEditSelected()
+                }
+                .disabled(
+                    viewModel.selectedEntry == nil
+                        || viewModel.selectedEntry?.kind == .directory
+                        || viewModel.isEditingFile
+                )
+                .keyboardShortcut("e", modifiers: [.command])
 
                 Button("Download") {
                     viewModel.requestDownloadSelected()
