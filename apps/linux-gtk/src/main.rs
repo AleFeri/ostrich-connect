@@ -4,7 +4,7 @@ use std::rc::Rc;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, ComboBoxText, Orientation,
+    Application, ApplicationWindow, Box as GtkBox, Button, ComboBoxText, Image, Label, Orientation,
     ScrolledWindow, TextBuffer, TextView,
 };
 use oc_backend::{Backend, ProtocolRegistry};
@@ -67,7 +67,9 @@ fn append_log(buffer: &TextBuffer, line: &str) {
 
 fn dispatch(state: &Rc<RefCell<AppState>>, command: UiCommand) {
     let mut state_ref = state.borrow_mut();
-    let response = state_ref.runtime.block_on(state_ref.backend.execute(command));
+    let response = state_ref
+        .runtime
+        .block_on(state_ref.backend.execute(command));
 
     match &response {
         UiResponse::Connected { session_id, .. } => state_ref.session_id = Some(*session_id),
@@ -87,7 +89,15 @@ fn build_ui(app: &Application) {
         .build();
 
     let root = GtkBox::new(Orientation::Vertical, 8);
+    let branding = GtkBox::new(Orientation::Horizontal, 8);
     let controls = GtkBox::new(Orientation::Horizontal, 8);
+
+    if let Some(logo) = load_logo_image() {
+        branding.append(&logo);
+    }
+    let title = Label::new(Some("ostrich-connect"));
+    title.add_css_class("title-3");
+    branding.append(&title);
 
     let selector = ComboBoxText::new();
     selector.append(Some("ftp"), "FTP");
@@ -116,6 +126,7 @@ fn build_ui(app: &Application) {
         .child(&log_view)
         .build();
 
+    root.append(&branding);
     root.append(&controls);
     root.append(&scroll);
     window.set_child(Some(&root));
@@ -174,6 +185,19 @@ fn build_ui(app: &Application) {
     dispatch(&state, UiCommand::LoadConfig);
 
     window.present();
+}
+
+fn load_logo_image() -> Option<Image> {
+    const LOGO_BYTES: &[u8] = include_bytes!("../../../assets/logo.png");
+
+    let loader = gtk4::gdk_pixbuf::PixbufLoader::new();
+    loader.write(LOGO_BYTES).ok()?;
+    loader.close().ok()?;
+    let pixbuf = loader.pixbuf()?;
+    let scaled = pixbuf
+        .scale_simple(26, 26, gtk4::gdk_pixbuf::InterpType::Bilinear)
+        .unwrap_or(pixbuf);
+    Some(Image::from_pixbuf(Some(&scaled)))
 }
 
 fn main() {

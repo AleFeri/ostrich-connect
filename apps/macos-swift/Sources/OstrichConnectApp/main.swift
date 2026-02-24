@@ -1111,6 +1111,13 @@ struct ConnectionsPage: View {
 struct NavigatorPage: View {
     @ObservedObject var viewModel: AppViewModel
 
+    private static let modifiedDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     var body: some View {
         VStack(spacing: 12) {
             HeaderStrip(
@@ -1331,7 +1338,7 @@ struct NavigatorPage: View {
 
     private func modifiedDateLabel(_ unix: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(unix))
-        return modifiedDateFormatter.string(from: date)
+        return Self.modifiedDateFormatter.string(from: date)
     }
 }
 
@@ -1459,6 +1466,7 @@ struct HeaderStrip: View {
     var body: some View {
         GlassPanel {
             HStack(spacing: 10) {
+                BrandLogoView()
                 Text(title)
                     .font(.title3.weight(.semibold))
                 Spacer(minLength: 10)
@@ -1483,6 +1491,62 @@ struct HeaderStrip: View {
         case .error:
             return "xmark.octagon.fill"
         }
+    }
+}
+
+private struct BrandLogoView: View {
+    private static let logoImage: NSImage? = loadLogoImage()
+
+    var body: some View {
+        Group {
+            if let logoImage = Self.logoImage {
+                Image(nsImage: logoImage)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "network")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 26, height: 26)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+        .accessibilityHidden(true)
+    }
+
+    private static func loadLogoImage() -> NSImage? {
+        var candidates: [URL] = []
+        if let customPath = ProcessInfo.processInfo.environment["OSTRICH_CONNECT_LOGO_PATH"] {
+            let trimmed = customPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                candidates.append(URL(fileURLWithPath: trimmed))
+            }
+        }
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        candidates.append(cwd.appendingPathComponent("assets/logo.png"))
+        candidates.append(cwd.appendingPathComponent("../assets/logo.png"))
+        candidates.append(cwd.appendingPathComponent("../../assets/logo.png"))
+        candidates.append(cwd.appendingPathComponent("../../../assets/logo.png"))
+
+        if let bundlePath = Bundle.main.resourcePath {
+            candidates.append(URL(fileURLWithPath: bundlePath).appendingPathComponent("logo.png"))
+            candidates.append(
+                URL(fileURLWithPath: bundlePath).appendingPathComponent("assets/logo.png")
+            )
+        }
+
+        for candidate in candidates {
+            if let image = NSImage(contentsOf: candidate) {
+                return image
+            }
+        }
+        return nil
     }
 }
 
@@ -1573,13 +1637,6 @@ struct WindowGlassBackground: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
-
-private let modifiedDateFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .medium
-    formatter.timeStyle = .short
-    return formatter
-}()
 
 final class OstrichAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
