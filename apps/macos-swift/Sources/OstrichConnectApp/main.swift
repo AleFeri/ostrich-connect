@@ -1128,37 +1128,22 @@ struct RootView: View {
     @StateObject private var viewModel = AppViewModel()
 
     var body: some View {
-        ZStack {
-            WindowGlassBackground()
-                .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [Color.white.opacity(0.14), .clear],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            Group {
-                if viewModel.backendReady {
-                    content
-                } else {
-                    GlassPanel {
-                        VStack(spacing: 10) {
-                            Image(systemName: "xmark.octagon.fill")
-                                .font(.system(size: 42))
-                                .foregroundStyle(.red)
-                            Text("Backend Unavailable")
-                                .font(.title2.weight(.semibold))
-                            Text(viewModel.statusMessage)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+        Group {
+            if viewModel.backendReady {
+                content
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "xmark.octagon.fill")
+                        .font(.system(size: 42))
+                        .foregroundStyle(.red)
+                    Text("Backend Unavailable")
+                        .font(.title2.weight(.semibold))
+                    Text(viewModel.statusMessage)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(16)
         }
         .frame(minWidth: 1120, minHeight: 760)
         .sheet(isPresented: $viewModel.isFormPresented) {
@@ -1195,93 +1180,51 @@ struct ConnectionsPage: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        VStack(spacing: 12) {
-            HeaderStrip(
-                title: "Connection Manager",
-                status: viewModel.statusMessage,
-                level: viewModel.statusLevel
-            )
-
-            HSplitView {
-                sidebar
-                    .frame(minWidth: 360, maxWidth: 460)
-                details
-            }
-
-            actionBar
-        }
-    }
-
-    private var sidebar: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Saved Connections")
-                        .font(.headline)
-                    Spacer()
-                    Text("\(viewModel.connections.count)")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.white.opacity(0.15), in: Capsule())
+        NavigationSplitView {
+            List(selection: $viewModel.selectedConnectionID) {
+                if viewModel.connections.isEmpty {
+                    EmptyStateView(
+                        title: "No Connections",
+                        systemImage: "externaldrive.badge.plus",
+                        message: "Create one with the + button in the toolbar."
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 240)
                 }
 
-                List(selection: $viewModel.selectedConnectionID) {
-                    if viewModel.connections.isEmpty {
-                        EmptyStateView(
-                            title: "No Connections",
-                            systemImage: "externaldrive.badge.plus",
-                            message: "Create one with the New button."
-                        )
-                        .frame(maxWidth: .infinity, minHeight: 240)
-                    }
-
-                    ForEach(viewModel.connections) { connection in
-                        HStack(spacing: 10) {
-                            Image(systemName: "network")
-                                .frame(width: 18)
+                ForEach(viewModel.connections) { connection in
+                    HStack(spacing: 10) {
+                        Image(systemName: "network")
+                            .frame(width: 18)
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(connection.name)
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text("\(connection.profile.host):\(connection.profile.port)")
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(connection.name)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                Text("\(connection.profile.host):\(connection.profile.port)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Text(connection.profile.protocolKind.label)
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 4)
-                                .background(protocolBadgeBackground(connection.profile.protocolKind))
-                                .clipShape(Capsule())
+                                .lineLimit(1)
                         }
-                        .tag(connection.id)
+                        Spacer(minLength: 8)
+                        Text(connection.profile.protocolKind.label)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(protocolBadgeBackground(connection.profile.protocolKind))
+                            .clipShape(Capsule())
                     }
+                    .tag(connection.id)
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-                .background(Color.clear)
             }
-        }
-    }
-
-    private var details: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Details")
-                        .font(.headline)
-                    Spacer()
-                    Image(systemName: "slider.horizontal.3")
-                        .foregroundStyle(.secondary)
-                }
-                Divider()
-
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 460)
+        } detail: {
+            VStack(spacing: 0) {
                 if let connection = viewModel.selectedConnection {
-                    DetailGrid(connection: connection)
+                    ScrollView {
+                        DetailGrid(connection: connection)
+                            .padding()
+                    }
                 } else {
                     EmptyStateView(
                         title: "Select a Connection",
@@ -1291,40 +1234,44 @@ struct ConnectionsPage: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                Spacer(minLength: 0)
+                Divider()
+
+                StatusBar(message: viewModel.statusMessage, level: viewModel.statusLevel)
             }
+            .background(.background)
         }
-    }
-
-    private var actionBar: some View {
-        GlassPanel {
-            HStack {
-                ControlGroup {
-                    Button("New") {
-                        viewModel.openCreateForm()
-                    }
-                    .keyboardShortcut("n", modifiers: [.command])
-
-                    Button("Edit") {
-                        viewModel.openEditForm()
-                    }
-                    .disabled(viewModel.selectedConnection == nil)
-
-                    Button("Delete") {
-                        viewModel.deleteSelectedConnection()
-                    }
-                    .disabled(viewModel.selectedConnection == nil)
-                }
-
-                Spacer()
-
-                Button("Connect") {
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
                     viewModel.connectSelectedConnection()
+                } label: {
+                    Label("Connect", systemImage: "bolt.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
                 .disabled(viewModel.selectedConnection == nil)
                 .keyboardShortcut(.return, modifiers: [])
+            }
+
+            ToolbarItemGroup(placement: .automatic) {
+                Button {
+                    viewModel.openCreateForm()
+                } label: {
+                    Label("New", systemImage: "plus")
+                }
+                .keyboardShortcut("n", modifiers: [.command])
+
+                Button {
+                    viewModel.openEditForm()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .disabled(viewModel.selectedConnection == nil)
+
+                Button {
+                    viewModel.deleteSelectedConnection()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .disabled(viewModel.selectedConnection == nil)
             }
         }
     }
@@ -1343,6 +1290,8 @@ struct ConnectionsPage: View {
 
 struct NavigatorPage: View {
     @ObservedObject var viewModel: AppViewModel
+    @State private var showInspector: Bool = true
+    @State private var sortOrder = [KeyPathComparator(\RemoteEntry.name)]
 
     private static let modifiedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -1351,193 +1300,128 @@ struct NavigatorPage: View {
         return formatter
     }()
 
-    var body: some View {
-        VStack(spacing: 12) {
-            HeaderStrip(
-                title: "File Navigator",
-                status: viewModel.statusMessage,
-                level: viewModel.statusLevel
-            )
-
-            pathAndSearchBar
-
-            HSplitView {
-                fileList
-                    .frame(minWidth: 740)
-                inspector
-                    .frame(minWidth: 280, maxWidth: 360)
-            }
-
-            actionBar
+    private var filteredEntries: [RemoteEntry] {
+        let query = viewModel.navigatorSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if query.isEmpty {
+            return viewModel.entries
         }
+        return viewModel.entries.filter { $0.name.lowercased().contains(query) }
     }
 
-    private var pathAndSearchBar: some View {
-        GlassPanel {
-            HStack(spacing: 12) {
-                Label(viewModel.currentPath, systemImage: "folder")
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(.secondary)
+                Text(viewModel.currentPath)
                     .font(.system(.subheadline, design: .monospaced))
                     .lineLimit(1)
-
-                Spacer(minLength: 16)
-
-                TextField("Type folder prefix and press Return", text: $viewModel.navigatorSearch)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
-                    .onSubmit {
-                        viewModel.openFirstUnambiguousMatch()
-                    }
-
-                Button("Open Unique Match") {
-                    viewModel.openFirstUnambiguousMatch()
-                }
-                .disabled(viewModel.navigatorSearch.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .truncationMode(.middle)
+                Spacer()
             }
-        }
-    }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.bar)
 
-    private var fileList: some View {
-        GlassPanel {
-            List(selection: $viewModel.selectedEntryID) {
-                if viewModel.entries.isEmpty {
-                    EmptyStateView(
-                        title: "No Files",
-                        systemImage: "folder.badge.questionmark",
-                        message: "This folder is empty or not loaded."
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 240)
-                }
+            Divider()
 
-                ForEach(viewModel.entries) { entry in
-                    HStack(spacing: 10) {
+            Table(filteredEntries, selection: $viewModel.selectedEntryID, sortOrder: $sortOrder) {
+                TableColumn("Name", sortUsing: KeyPathComparator(\RemoteEntry.name)) { entry in
+                    HStack(spacing: 8) {
                         Image(systemName: icon(for: entry.kind))
                             .foregroundStyle(iconColor(for: entry.kind))
-                            .frame(width: 20)
-
+                            .frame(width: 18)
                         Text(entry.kind == .directory ? "\(entry.name)/" : entry.name)
                             .lineLimit(1)
-
-                        Spacer()
-
-                        if entry.kind != .directory {
-                            Text(
-                                ByteCountFormatter.string(
-                                    fromByteCount: Int64(entry.size),
-                                    countStyle: .file
-                                )
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .tag(entry.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        if entry.kind == .directory {
-                            viewModel.openEntry(entry)
-                        } else {
-                            viewModel.requestDownloadSelected()
-                        }
                     }
                 }
-            }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .background(Color.clear)
-        }
-    }
+                .width(min: 200)
 
-    private var inspector: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Inspector")
-                        .font(.headline)
-                    Spacer()
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
-                Divider()
-
-                if let entry = viewModel.selectedEntry {
-                    inspectorLine("Name", entry.name)
-                    inspectorLine("Path", entry.path)
-                    inspectorLine("Type", entry.kind.rawValue)
+                TableColumn("Size") { entry in
                     if entry.kind != .directory {
-                        inspectorLine(
-                            "Size",
+                        Text(
                             ByteCountFormatter.string(
                                 fromByteCount: Int64(entry.size),
                                 countStyle: .file
                             )
                         )
+                        .foregroundStyle(.secondary)
                     }
+                }
+                .width(min: 80, ideal: 100)
+
+                TableColumn("Modified") { entry in
                     if let modified = entry.modifiedUnix {
-                        inspectorLine("Modified", modifiedDateLabel(modified))
-                    }
-
-                    Divider()
-                    if entry.kind == .directory {
-                        Button("Open Folder") {
-                            viewModel.openSelectedEntry()
-                        }
-                        .buttonStyle(.borderedProminent)
+                        Text(modifiedDateLabel(modified))
+                            .foregroundStyle(.secondary)
                     } else {
-                        HStack {
-                            Button("Edit File") {
-                                viewModel.requestEditSelected()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(viewModel.isEditingFile)
-
-                            Button("Download File") {
-                                viewModel.requestDownloadSelected()
-                            }
-                            .buttonStyle(.bordered)
-                        }
+                        Text("-")
+                            .foregroundStyle(.tertiary)
                     }
-                } else {
-                    EmptyStateView(
-                        title: "No Selection",
-                        systemImage: "cursorarrow.rays",
-                        message: "Select a file or folder from the list."
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-
-                Spacer(minLength: 0)
+                .width(min: 120, ideal: 160)
             }
+            .alternatingRowBackgrounds()
+            .contextMenu(forSelectionType: String.self) { ids in
+                if let id = ids.first, let entry = viewModel.entries.first(where: { $0.id == id }) {
+                    if entry.kind == .directory {
+                        Button("Open Folder") { viewModel.openEntry(entry) }
+                    } else {
+                        Button("Edit File") { viewModel.requestEditSelected() }
+                        Button("Download File") { viewModel.requestDownloadSelected() }
+                    }
+                }
+            } primaryAction: { ids in
+                if let id = ids.first, let entry = viewModel.entries.first(where: { $0.id == id }) {
+                    if entry.kind == .directory {
+                        viewModel.openEntry(entry)
+                    } else {
+                        viewModel.requestDownloadSelected()
+                    }
+                }
+            }
+
+            Divider()
+
+            StatusBar(message: viewModel.statusMessage, level: viewModel.statusLevel)
         }
-    }
+        .background(.background)
+        .inspector(isPresented: $showInspector) {
+            InspectorContent(viewModel: viewModel)
+                .inspectorColumnWidth(min: 220, ideal: 280, max: 360)
+        }
+        .searchable(text: $viewModel.navigatorSearch, prompt: "Filter files")
+        .onSubmit(of: .search) {
+            viewModel.openFirstUnambiguousMatch()
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .automatic) {
+                Button {
+                    viewModel.disconnectAndReturn()
+                } label: {
+                    Label("Disconnect", systemImage: "eject.fill")
+                }
+                .keyboardShortcut(.escape, modifiers: [])
 
-    private var actionBar: some View {
-        GlassPanel {
-            HStack {
-                ControlGroup {
-                    Button("Connections") {
-                        viewModel.disconnectAndReturn()
-                    }
-                    .keyboardShortcut(.escape, modifiers: [])
-
-                    Button("Up") {
-                        viewModel.goUpDirectory()
-                    }
-
-                    Button("Refresh") {
-                        viewModel.refreshDirectory()
-                    }
-                    .keyboardShortcut("r", modifiers: [.command])
+                Button {
+                    viewModel.goUpDirectory()
+                } label: {
+                    Label("Up", systemImage: "chevron.up")
                 }
 
-                Spacer()
-
-                Button("Open Folder") {
-                    viewModel.openSelectedEntry()
+                Button {
+                    viewModel.refreshDirectory()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .disabled(viewModel.selectedEntry?.kind != .directory)
+                .keyboardShortcut("r", modifiers: [.command])
+            }
 
-                Button("Edit") {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
                     viewModel.requestEditSelected()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
                 }
                 .disabled(
                     viewModel.selectedEntry == nil
@@ -1546,10 +1430,18 @@ struct NavigatorPage: View {
                 )
                 .keyboardShortcut("e", modifiers: [.command])
 
-                Button("Download") {
+                Button {
                     viewModel.requestDownloadSelected()
+                } label: {
+                    Label("Download", systemImage: "arrow.down.circle")
                 }
                 .disabled(viewModel.selectedEntry == nil || viewModel.selectedEntry?.kind == .directory)
+
+                Button {
+                    showInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.trailing")
+                }
             }
         }
     }
@@ -1573,6 +1465,92 @@ struct NavigatorPage: View {
             return .mint
         case .file:
             return .secondary
+        }
+    }
+
+    private func modifiedDateLabel(_ unix: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(unix))
+        return Self.modifiedDateFormatter.string(from: date)
+    }
+}
+
+struct InspectorContent: View {
+    @ObservedObject var viewModel: AppViewModel
+
+    private static let modifiedDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let entry = viewModel.selectedEntry {
+                Label(entry.name, systemImage: entryIcon(entry.kind))
+                    .font(.headline)
+                    .lineLimit(2)
+                    .padding(.bottom, 4)
+
+                Divider()
+
+                inspectorLine("Path", entry.path)
+                inspectorLine("Type", entry.kind.rawValue.capitalized)
+                if entry.kind != .directory {
+                    inspectorLine(
+                        "Size",
+                        ByteCountFormatter.string(
+                            fromByteCount: Int64(entry.size),
+                            countStyle: .file
+                        )
+                    )
+                }
+                if let modified = entry.modifiedUnix {
+                    inspectorLine("Modified", modifiedDateLabel(modified))
+                }
+
+                Divider()
+
+                if entry.kind == .directory {
+                    Button("Open Folder") {
+                        viewModel.openSelectedEntry()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    VStack(spacing: 8) {
+                        Button("Edit File") {
+                            viewModel.requestEditSelected()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isEditingFile)
+                        .frame(maxWidth: .infinity)
+
+                        Button("Download File") {
+                            viewModel.requestDownloadSelected()
+                        }
+                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            } else {
+                EmptyStateView(
+                    title: "No Selection",
+                    systemImage: "cursorarrow.rays",
+                    message: "Select a file or folder from the list."
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding()
+    }
+
+    private func entryIcon(_ kind: RemoteEntryKind) -> String {
+        switch kind {
+        case .directory: return "folder.fill"
+        case .symlink: return "link"
+        case .file: return "doc.fill"
         }
     }
 
@@ -1616,56 +1594,47 @@ struct ConnectionFormSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            HeaderStrip(
-                title: title,
-                status: "Configure transport and authentication settings.",
-                level: .info
-            )
+        VStack(spacing: 0) {
+            Form {
+                Section("Connection") {
+                    TextField("Name", text: $viewModel.draft.name)
+                        .focused($focusedField, equals: .name)
 
-            GlassPanel {
-                Form {
-                    Section("Connection") {
-                        TextField("Name", text: $viewModel.draft.name)
-                            .focused($focusedField, equals: .name)
-
-                        Picker("Protocol", selection: protocolBinding) {
-                            ForEach(ProtocolKind.allCases) { protocolKind in
-                                Text(protocolKind.label).tag(protocolKind)
-                            }
+                    Picker("Protocol", selection: protocolBinding) {
+                        ForEach(ProtocolKind.allCases) { protocolKind in
+                            Text(protocolKind.label).tag(protocolKind)
                         }
-
-                        TextField("Host", text: $viewModel.draft.host)
-                            .focused($focusedField, equals: .host)
-                        TextField("Port", text: $viewModel.draft.port)
-                            .focused($focusedField, equals: .port)
-                        TextField("Username", text: $viewModel.draft.username)
-                            .focused($focusedField, equals: .username)
                     }
 
-                    Section("Authentication") {
-                        SecureField("Password (optional for key auth)", text: $viewModel.draft.password)
-                            .focused($focusedField, equals: .password)
-                        TextField("Private Key Path (e.g. ~/.ssh/id_rsa)", text: $viewModel.draft.privateKeyPath)
-                            .focused($focusedField, equals: .privateKeyPath)
-                        TextEditor(text: $viewModel.draft.privateKeyPem)
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 110)
-                    }
-
-                    Section("Transport") {
-                        Picker("Security", selection: $viewModel.draft.security) {
-                            ForEach(ConnectionSecurity.options(for: viewModel.draft.protocolKind)) { security in
-                                Text(security.label).tag(security)
-                            }
-                        }
-                        Toggle("Strict Host Key Checking", isOn: $viewModel.draft.strictHostKeyChecking)
-                        Toggle("Passive Mode", isOn: $viewModel.draft.passiveMode)
-                    }
+                    TextField("Host", text: $viewModel.draft.host)
+                        .focused($focusedField, equals: .host)
+                    TextField("Port", text: $viewModel.draft.port)
+                        .focused($focusedField, equals: .port)
+                    TextField("Username", text: $viewModel.draft.username)
+                        .focused($focusedField, equals: .username)
                 }
-                .scrollContentBackground(.hidden)
-                .background(Color.clear)
+
+                Section("Authentication") {
+                    SecureField("Password (optional for key auth)", text: $viewModel.draft.password)
+                        .focused($focusedField, equals: .password)
+                    TextField("Private Key Path (e.g. ~/.ssh/id_rsa)", text: $viewModel.draft.privateKeyPath)
+                        .focused($focusedField, equals: .privateKeyPath)
+                    TextEditor(text: $viewModel.draft.privateKeyPem)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minHeight: 110)
+                }
+
+                Section("Transport") {
+                    Picker("Security", selection: $viewModel.draft.security) {
+                        ForEach(ConnectionSecurity.options(for: viewModel.draft.protocolKind)) { security in
+                            Text(security.label).tag(security)
+                        }
+                    }
+                    Toggle("Strict Host Key Checking", isOn: $viewModel.draft.strictHostKeyChecking)
+                    Toggle("Passive Mode", isOn: $viewModel.draft.passiveMode)
+                }
             }
+            .formStyle(.grouped)
 
             if let formError = viewModel.formError {
                 HStack {
@@ -1675,25 +1644,28 @@ struct ConnectionFormSheet: View {
                 }
                 .font(.subheadline)
                 .foregroundStyle(.red)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
             }
 
-            GlassPanel {
-                HStack {
-                    Spacer()
-                    Button("Cancel") {
-                        viewModel.isFormPresented = false
-                        viewModel.formError = nil
-                    }
-                    Button("Save") {
-                        viewModel.saveDraft()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: [])
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    viewModel.isFormPresented = false
+                    viewModel.formError = nil
                 }
+                .keyboardShortcut(.escape, modifiers: [])
+                Button("Save") {
+                    viewModel.saveDraft()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: [])
             }
+            .padding()
         }
-        .padding(16)
-        .frame(width: 760, height: 690)
+        .frame(width: 560, height: 620)
         .onAppear {
             focusedField = .name
         }
@@ -1709,26 +1681,24 @@ struct ConnectionFormSheet: View {
     }
 }
 
-struct HeaderStrip: View {
-    let title: String
-    let status: String
+struct StatusBar: View {
+    let message: String
     let level: StatusLevel
 
     var body: some View {
-        GlassPanel {
-            HStack(spacing: 10) {
-                BrandLogoView()
-                Text(title)
-                    .font(.title3.weight(.semibold))
-                Spacer(minLength: 10)
-                Image(systemName: statusSymbol(level))
-                    .foregroundStyle(level.color)
-                Text(status)
-                    .font(.subheadline)
-                    .lineLimit(2)
-                    .foregroundStyle(.secondary)
-            }
+        HStack(spacing: 6) {
+            Image(systemName: statusSymbol(level))
+                .foregroundStyle(level.color)
+                .font(.caption)
+            Text(message)
+                .font(.caption)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+            Spacer()
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(.bar)
     }
 
     private func statusSymbol(_ level: StatusLevel) -> String {
@@ -1859,36 +1829,6 @@ struct EmptyStateView: View {
     }
 }
 
-struct GlassPanel<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        content
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.regularMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-    }
-}
-
-struct WindowGlassBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.state = .active
-        view.blendingMode = .behindWindow
-        view.material = .underWindowBackground
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
 final class OstrichAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -1909,10 +1849,10 @@ struct OstrichConnectApp: App {
     @NSApplicationDelegateAdaptor(OstrichAppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup("ostrich-connect") {
+        WindowGroup("Ostrich Connect") {
             RootView()
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified)
         .defaultSize(width: 1180, height: 790)
     }
 }
