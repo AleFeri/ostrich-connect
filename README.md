@@ -4,9 +4,7 @@
 
 ## Disclaimer
 
-- This project was done with AI.
-- I built it to replace Cyberduck because, in my experience, it is unusable, slow, and full of bugs.
-- This is not a demonstration of my programming skills.
+I built it to replace Cyberduck because, in my experience, it is unusable, slow, and full of bugs.
 
 ## Workspace Layout
 
